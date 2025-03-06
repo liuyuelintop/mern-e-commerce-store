@@ -1,29 +1,95 @@
-# 🛠 购物车 API 单元测试（`cart.test.js`）
+# **🛠 购物车 API 单元测试 (`cart.test.js`)**
 
 ## **📌 为什么要做 `cart.test.js`？**
 
-在学习 Udemy 课程时，我发现课程作者在后端购物车 API 代码中存在一些问题，例如：
+在学习 Udemy 课程时，我发现课程作者在后端购物车 API 代码中存在 **数据存储格式不一致的问题**，但由于 MongoDB 和前端 `useCartStore` 代码的兼容性，这个错误 **没有导致 API 崩溃**。具体问题如下：
 
-- **错误的 `find()` 查询**，导致购物车数据不匹配。
+### **⚠️ 原因分析**
 
-  - `const products = await Product.find({ _id: { $in: req.user.cartItems } });`
-  - ```javascript
+1. **错误的数据存储格式**
+
+   - `cartItems` **应存储** `{ product: ObjectId, quantity: number }`。
+   - 但原代码错误地存储了 `{ _id: ObjectId, quantity: number }`。
+   - MongoDB **仍然允许 `find({ _id: { $in: req.user.cartItems } })` 查询成功**，导致 API 看起来是正确的。
+
+2. **错误的 `find()` 查询**
+
+   ```js
+   const products = await Product.find({ _id: { $in: req.user.cartItems } });
+   ```
+
+   - `req.user.cartItems` 不是 `_id` 数组，而是 **包含 `product` 字段的对象数组**。
+
+3. **错误的 `cartItem` 匹配**
+
+   ```js
+   const cartItems = products.map((product) => {
+     const item = req.user.cartItems.find(
+       (cartItem) => cartItem.id === product.id
+     );
+     return { ...product.toJSON(), quantity: item.quantity };
+   });
+   ```
+
+   - `cartItem.id` **不存在**，应改为 `cartItem.product.toString()`。
+   - `product.id` **不存在**，应改为 `product._id.toString()`。
+
+### **🛠 解决方案**
+
+- **后端修正** `addToCart` 和 `getCartProducts `，**确保正确添加 `CartItem` 和正确提取 `product._id`**。
+
+```javascript
+export const getCartProducts = async (req, res) => {
+  try {
+    // 1️⃣ 提取购物车中的 product ID 数组
+    const productIds = req.user.cartItems.map((item) => item.product);
+
+    // 2️⃣ 查询所有匹配的产品
+    const products = await Product.find({ _id: { $in: productIds } }).lean();
+
+    // 3️⃣ 构建返回的购物车数据，匹配商品和数量
     const cartItems = products.map((product) => {
       const item = req.user.cartItems.find(
-        (cartItem) => cartItem.id === product.id
+        (cartItem) => cartItem.product.toString() === product._id.toString()
       );
-      return { ...product.toJSON(), quantity: item.quantity };
+
+      return { ...product, quantity: item.quantity };
     });
-    ```
 
-- **O(n²) 查询性能问题**，影响大数据量处理。
-- **`getCartProducts` 逻辑错误**，导致 `quantity` 可能错误。
+    res.json(cartItems);
+  } catch (error) {
+    console.error("Error in getCartProducts controller", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
 
-为了 **修正这些问题**，我修改了 `getCartProducts` 逻辑，但 **没有前端界面** 进行测试，所以我编写了 `cart.test.js` 进行 API 测试，以确保：
+export const addToCart = async (req, res) => {
+  try {
+    const { productId } = req.body;
+    const user = req.user;
 
-1. **身份验证正确**（无 token、无效 token、过期 token 都能正确处理）。
-2. **购物车数据正确返回**（空购物车时返回 `[]`，有商品时返回正确数据）。
-3. **Jest + Supertest 自动化测试**，未来修改代码时不会破坏功能。
+    // 1️⃣ 查找购物车中是否已存在该商品
+    const existingItem = user.cartItems.find(
+      (item) => item.product.toString() === productId
+    );
+
+    if (existingItem) {
+      existingItem.quantity += 1;
+    } else {
+      // 2️⃣ 正确存入 `{ product: ObjectId, quantity: number }`
+      user.cartItems.push({ product: productId, quantity: 1 });
+    }
+
+    await user.save();
+    res.json(user.cartItems);
+  } catch (error) {
+    console.error("Error in addToCart controller", error.message);
+    res.status(500).json({ message: "Server error", error: error.message });
+  }
+};
+```
+
+- **前端修正** `useCartStore`，**确保 `cart.find(item => item.product._id === product._id)`**。
 
 ---
 
@@ -116,6 +182,21 @@ it("should return an empty cart if the user has no items", async () => {
 
 ```js
 it("should return correct cart products with quantities", async () => {
+  const testUser = await User.create({
+    name: "Test User",
+    email: "test@example.com",
+    password: "hashedpassword",
+    cartItems: [
+      { product: testProduct._id, quantity: 2 }, // ✅ 正确存储 `{ product: ObjectId, quantity }`
+    ],
+  });
+
+  const accessToken = jwt.sign(
+    { userId: testUser._id },
+    process.env.ACCESS_TOKEN_SECRET,
+    { expiresIn: "1h" }
+  );
+
   const res = await request(app)
     .get("/api/cart")
     .set("Cookie", `accessToken=${accessToken}`);
@@ -129,7 +210,7 @@ it("should return correct cart products with quantities", async () => {
 
 ---
 
-### 运行结果
+## **📌 运行结果**
 
 ```bash
 Test Suites: 1 passed, 1 total
@@ -138,10 +219,10 @@ Snapshots:   0 total
 Time:        2.542 s
 ```
 
+---
+
 ## **📌 结论**
 
 ✅ 这次测试确保了 `getCartProducts` API **逻辑正确** ，并修复了 Udemy 课程的错误。
-
-✅ 通过 `Jest + Supertest`，可以 **自动化验证 API 是否正确** 。
-
+✅ 通过 `Jest + Supertest`，可以 **自动化验证 API 是否正确**。
 ✅ **未来任何代码改动，都可以用 `npm test` 确保不会破坏购物车功能！** 🚀
