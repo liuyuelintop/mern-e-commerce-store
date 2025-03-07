@@ -139,9 +139,16 @@ function getDatesInRange(startDate, endDate) {
  * @returns {DailySalesData[]}
  */
 const fillMissingSalesRecords = (dateArray, salesData) => {
+  // Build a lookup table keyed by the date string (the _id from your aggregation).
+  const salesLookup = salesData.reduce((acc, record) => {
+    acc[record._id] = record;
+    return acc;
+  }, {});
+
+  // Now simply reference the lookup object for each date in O(1) time.
   return dateArray.map((date) => ({
     date,
-    sales: salesData.find((d) => d._id === date)?.sales ?? 0,
-    revenue: salesData.find((d) => d._id === date)?.revenue ?? 0,
+    sales: salesLookup[date]?.sales || 0,
+    revenue: salesLookup[date]?.revenue || 0,
   }));
 };
