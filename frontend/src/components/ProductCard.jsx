@@ -6,7 +6,6 @@ import { useCartStore } from "../stores/useCartStore";
 const ProductCard = ({ product }) => {
   const { user } = useUserStore();
   const { addToCart } = useCartStore();
-  console.log("Product Image URL: ", product.image);
 
   const handleAddToCart = () => {
     if (!user) {
